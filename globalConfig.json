@@ -1,0 +1,222 @@
+{
+    "pages": {
+        "configuration": {
+            "title": "Configuration",
+            "description": "Shared settings for the UK Open Data inputs.",
+            "tabs": [
+                {
+                    "name": "logging",
+                    "title": "Logging",
+                    "entity": [
+                        {
+                            "type": "singleSelect",
+                            "label": "Log level",
+                            "field": "loglevel",
+                            "defaultValue": "INFO",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {
+                                        "label": "DEBUG",
+                                        "value": "DEBUG"
+                                    },
+                                    {
+                                        "label": "INFO",
+                                        "value": "INFO"
+                                    },
+                                    {
+                                        "label": "WARNING",
+                                        "value": "WARNING"
+                                    },
+                                    {
+                                        "label": "ERROR",
+                                        "value": "ERROR"
+                                    }
+                                ]
+                            },
+                            "required": true
+                        }
+                    ]
+                }
+            ]
+        },
+        "inputs": {
+            "title": "Inputs",
+            "description": "Modular inputs for UK Carbon Intensity (api.carbonintensity.org.uk) and NHS England A&E monthly statistics. Both are open data, no API key.",
+            "table": {
+                "actions": [
+                    "edit",
+                    "delete",
+                    "clone"
+                ],
+                "header": [
+                    {
+                        "label": "Name",
+                        "field": "name"
+                    },
+                    {
+                        "label": "Interval",
+                        "field": "interval"
+                    },
+                    {
+                        "label": "Index",
+                        "field": "index"
+                    },
+                    {
+                        "label": "Status",
+                        "field": "disabled"
+                    }
+                ]
+            },
+            "services": [
+                {
+                    "name": "carbon_intensity",
+                    "title": "Carbon Intensity",
+                    "description": "Poll the UK Carbon Intensity API and index national intensity + generation mix (half-hourly).",
+                    "entity": [
+                        {
+                            "type": "text",
+                            "label": "Name",
+                            "field": "name",
+                            "required": true,
+                            "help": "Unique input name (letters, digits, underscores).",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Name must begin with a letter and contain only letters, digits and underscores.",
+                                    "pattern": "^[a-zA-Z]\\w*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-100.",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                }
+                            ]
+                        },
+                        {
+                            "type": "interval",
+                            "field": "interval",
+                            "label": "Interval (s)",
+                            "required": true,
+                            "defaultValue": "1800",
+                            "help": "Poll interval in seconds. 1800 (30 min) matches the API's half-hourly cadence."
+                        },
+                        {
+                            "type": "text",
+                            "field": "index",
+                            "label": "Index",
+                            "required": true,
+                            "defaultValue": "carbonintensity",
+                            "help": "Destination index. Events are written with sourcetypes carbonintensity:national and carbonintensity:generation.",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "field": "lookback_days",
+                            "label": "Lookback (days)",
+                            "required": true,
+                            "defaultValue": "2",
+                            "help": "On each run, fetch the last N days and index only periods not already seen (idempotent via checkpoint).",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "errorMsg": "1-30 days.",
+                                    "range": [
+                                        1,
+                                        30
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "nhs_ae",
+                    "title": "NHS A&E (monthly)",
+                    "description": "Download NHS England monthly A&E attendance CSVs and index any months not already loaded.",
+                    "entity": [
+                        {
+                            "type": "text",
+                            "label": "Name",
+                            "field": "name",
+                            "required": true,
+                            "help": "Unique input name (letters, digits, underscores).",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Name must begin with a letter and contain only letters, digits and underscores.",
+                                    "pattern": "^[a-zA-Z]\\w*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-100.",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                }
+                            ]
+                        },
+                        {
+                            "type": "interval",
+                            "field": "interval",
+                            "label": "Interval (s)",
+                            "required": true,
+                            "defaultValue": "86400",
+                            "help": "Check interval. NHS publishes monthly (~6 weeks in arrears), so once a day is plenty."
+                        },
+                        {
+                            "type": "text",
+                            "field": "index",
+                            "label": "Index",
+                            "required": true,
+                            "defaultValue": "nhsengland",
+                            "help": "Destination index. Events are written with sourcetype nhs:ae:monthly.",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "field": "financial_years",
+                            "label": "Financial years",
+                            "required": true,
+                            "defaultValue": "2025-26,2026-27",
+                            "help": "Comma-separated NHS financial-year pages to scan for monthly CSVs (e.g. 2025-26,2026-27).",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-200.",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    "meta": {
+        "name": "TA-uk-open-data",
+        "restRoot": "TA_uk_open_data",
+        "version": "1.0.0",
+        "displayName": "UK Open Data — Carbon Intensity & NHS A&E",
+        "schemaVersion": "0.0.10",
+        "supportedThemes": [
+            "light",
+            "dark"
+        ]
+    }
+}

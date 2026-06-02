@@ -1,0 +1,63 @@
+name: build-release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install UCC + AppInspect
+        run: pip install --upgrade splunk-add-on-ucc-framework splunk-appinspect
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(python -c "import json;print(json.load(open('package/app.manifest'))['info']['id']['version'])")"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${VERSION}"
+
+      - name: Build add-on
+        run: |
+          ucc-gen build --source package --ta-version "${{ steps.ver.outputs.version }}"
+          ucc-gen package --path output/TA-uk-open-data -o .
+          ls -l TA-uk-open-data-*.tar.gz
+
+      - name: AppInspect (precert)
+        continue-on-error: true
+        run: |
+          splunk-appinspect inspect TA-uk-open-data-*.tar.gz \
+            --mode precert --data-format junitxml \
+            --output-file appinspect-report.xml || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TA-uk-open-data-${{ steps.ver.outputs.version }}
+          path: |
+            TA-uk-open-data-*.tar.gz
+            appinspect-report.xml
+
+      - name: Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TA-uk-open-data-*.tar.gz
+          generate_release_notes: true

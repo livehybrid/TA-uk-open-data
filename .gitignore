@@ -1,0 +1,9 @@
+output/
+*.tar.gz
+*.spl
+appinspect-report.xml
+appinspect_report.xml
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
