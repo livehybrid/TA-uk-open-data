@@ -211,7 +211,7 @@
     "meta": {
         "name": "TA-uk-open-data",
         "restRoot": "TA_uk_open_data",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "displayName": "UK Open Data — Carbon Intensity & NHS A&E",
         "schemaVersion": "0.0.10",
         "supportedThemes": [
