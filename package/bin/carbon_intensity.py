@@ -44,8 +44,12 @@ class CarbonIntensity(Script):
         scheme.use_external_validation = False
         scheme.streaming_mode_xml = True
         scheme.use_single_instance = False
+        # NB: do not declare "index" (or interval/host/source/sourcetype) as a
+        # scheme argument — Splunk supplies those natively. Declaring "index"
+        # makes splunkd reject the whole kind at startup ("Endpoint argument
+        # 'index' is an internal argument"), so the modular input never
+        # registers. The index still comes from inputs.conf.
         for name, desc in (
-            ("index", "Destination index."),
             ("lookback_days", "Days of history to fetch each run."),
         ):
             arg = Argument(name)
