@@ -8,6 +8,8 @@ XML, independent of splunkd having scheduled them.
 """
 from __future__ import annotations
 
+from xml.sax.saxutils import escape
+
 import pytest
 
 from conftest import docker_exec
@@ -30,4 +32,6 @@ def test_script_emits_scheme(splunk, script, title):
     )
     assert rc == 0, f"{script} --scheme exited {rc}\nSTDOUT:\n{out}\nSTDERR:\n{err}"
     assert "<scheme>" in out, f"{script} did not emit a scheme:\n{out}\n{err}"
-    assert title in out, f"{script} scheme missing title '{title}':\n{out}"
+    # The scheme is XML, so a title containing & (e.g. "NHS A&E") is emitted as
+    # "NHS A&amp;E". Compare against the XML-escaped form, not the raw string.
+    assert escape(title) in out, f"{script} scheme missing title '{title}':\n{out}"
