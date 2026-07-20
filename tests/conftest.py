@@ -32,6 +32,14 @@ PW = os.environ.get("SPLUNK_PASSWORD", "Changeme1!")
 CONTAINER = os.environ.get("SPLUNK_CONTAINER", "ta_uk_open_data_splunk")
 APP = "TA-uk-open-data"
 
+# Modular-input kinds this add-on ships. splunkd opens the management port (so
+# /services/server/info answers 200 and the compose healthcheck passes) before
+# it has finished introspecting a freshly-installed app's modular inputs, so
+# /services/data/modular-inputs can be briefly empty at that point. The `splunk`
+# fixture waits for these kinds to register so every test asserts against a
+# fully-initialised splunkd rather than a cold-start snapshot.
+EXPECTED_MODULAR_INPUTS = ("carbon_intensity", "nhs_ae")
+
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
@@ -96,13 +104,32 @@ def splunk():
     c = Splunk()
     deadline = time.time() + 300
     last = "no attempt"
+    ready = False
     while time.time() < deadline:
         try:
             status, body = c.request("GET", "/services/server/info", params={"output_mode": "json"})
             if status == 200:
-                return c
+                ready = True
+                break
             last = f"{status}: {body[:200]}"
         except Exception as exc:  # connection refused while Splunk boots
             last = repr(exc)
         time.sleep(5)
-    pytest.fail(f"Splunk management API not ready at {MGMT} within 300s (last: {last})")
+    if not ready:
+        pytest.fail(f"Splunk management API not ready at {MGMT} within 300s (last: {last})")
+
+    # The management port answers before splunkd finishes introspecting a
+    # freshly-installed app's modular inputs. Wait for this add-on's kinds to
+    # register so the registration / scheme / live-create tests do not race a
+    # still-initialising splunkd. On timeout, fall through and let the specific
+    # assertion report exactly which kind is missing.
+    mi_deadline = time.time() + 180
+    while time.time() < mi_deadline:
+        try:
+            names = {e["name"] for e in c.entries("/services/data/modular-inputs")}
+            if all(k in names for k in EXPECTED_MODULAR_INPUTS):
+                break
+        except Exception:  # transient during introspection settle
+            pass
+        time.sleep(3)
+    return c
