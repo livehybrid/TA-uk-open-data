@@ -38,6 +38,9 @@ POLL_INTERVAL = 10
 def carbon_input(splunk):
     """Create a short-interval carbon_intensity input; remove it on teardown."""
     used_path = None
+    # NB: this modular-input create handler rejects a "disabled" arg on POST
+    # ("Argument \"disabled\" is not supported by this handler"). We enable the
+    # stanza explicitly below rather than passing disabled=0 here.
     for path in CREATE_PATHS:
         status, body = splunk.request(
             "POST",
@@ -47,13 +50,14 @@ def carbon_input(splunk):
                 "index": INDEX,
                 "interval": "60",
                 "lookback_days": "2",
-                "disabled": "0",
             },
         )
         if status in (200, 201) or (status == 409):  # created, or already exists
             used_path = path
             break
     assert used_path, f"could not create carbon_intensity input (last {status}: {body[:400]})"
+    # Ensure it is enabled even if it pre-existed (409).
+    splunk.request("POST", f"{used_path}/{STANZA}/enable")
 
     yield used_path
 
@@ -74,8 +78,12 @@ def test_carbon_intensity_events_indexed(splunk, carbon_input):
     deadline = time.time() + POLL_SECONDS
     results = []
     while time.time() < deadline:
+        # `| spath` parses each event's JSON `_raw` directly, so field assertions
+        # are independent of whether search-time auto-kv (props KV_MODE=json) is
+        # in scope for this oneshot context. This is how a dashboard panel reads
+        # the payload too, so it tests the real contract deterministically.
         results = splunk.search(
-            f'search index={INDEX} sourcetype={NATIONAL_ST} | head 5',
+            f'search index={INDEX} sourcetype={NATIONAL_ST} | head 5 | spath',
             earliest="-7d",
         )
         if results:
@@ -104,7 +112,7 @@ def test_generation_mix_events_indexed(splunk, carbon_input):
     results = []
     while time.time() < deadline:
         results = splunk.search(
-            f'search index={INDEX} sourcetype={GENERATION_ST} | head 5',
+            f'search index={INDEX} sourcetype={GENERATION_ST} | head 5 | spath',
             earliest="-7d",
         )
         if results:

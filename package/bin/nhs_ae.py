@@ -7,9 +7,9 @@ import os
 import re
 import sys
 import time
+import urllib.request
 from calendar import timegm
 
-import requests
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
 ST = "nhs:ae:monthly"
@@ -18,6 +18,20 @@ MONTHS = {m: i + 1 for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
      "august", "september", "october", "november", "december"])}
 UA = {"User-Agent": "Mozilla/5.0 (TA-uk-open-data NHS A&E modular input)"}
+
+
+def _fetch_text(url, timeout):
+    """Fetch a URL and return its decoded body using the standard library.
+
+    Avoids ``requests``: the modular input runs under Splunk's bundled Python
+    (3.9 on Splunk 10.0/10.1), and modern ``requests`` releases use PEP 604
+    ``X | Y`` annotations that are evaluated at import time and fail on < 3.10,
+    which crashes scheme introspection and blocks the input from registering.
+    """
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed england.nhs.uk endpoints
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return resp.read().decode(charset, errors="replace")
 
 
 def _num(v):
@@ -74,13 +88,13 @@ class NhsAE(Script):
 
     def _csv_links(self, fy):
         try:
-            html = requests.get(BASE % fy, headers=UA, timeout=40).text
+            html = _fetch_text(BASE % fy, 40)
         except Exception:
             return []
         return list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
 
     def _emit_csv(self, url, index, ew, name):
-        raw = requests.get(url, headers=UA, timeout=60).text
+        raw = _fetch_text(url, 60)
         rows = list(csv.reader(io.StringIO(raw)))
         if len(rows) < 2:
             return 0, None
