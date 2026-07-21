@@ -4,9 +4,9 @@ import json
 import os
 import sys
 import time
+import urllib.request
 from calendar import timegm
 
-import requests
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
 API = "https://api.carbonintensity.org.uk"
@@ -24,9 +24,17 @@ def _epoch(iso):
 
 
 def _get(url):
-    r = requests.get(url, headers={"Accept": "application/json"}, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    """Fetch and parse JSON using the standard library.
+
+    Avoids ``requests``: the modular input runs under Splunk's bundled Python
+    (3.9 on Splunk 10.0/10.1), and modern ``requests`` releases use PEP 604
+    ``X | Y`` annotations that are evaluated at import time and fail on < 3.10,
+    which crashes scheme introspection and blocks the input from registering.
+    """
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed api.carbonintensity.org.uk endpoint
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return json.loads(resp.read().decode(charset))
 
 
 class CarbonIntensity(Script):
@@ -36,8 +44,12 @@ class CarbonIntensity(Script):
         scheme.use_external_validation = False
         scheme.streaming_mode_xml = True
         scheme.use_single_instance = False
+        # NB: do not declare "index" (or interval/host/source/sourcetype) as a
+        # scheme argument — Splunk supplies those natively. Declaring "index"
+        # makes splunkd reject the whole kind at startup ("Endpoint argument
+        # 'index' is an internal argument"), so the modular input never
+        # registers. The index still comes from inputs.conf.
         for name, desc in (
-            ("index", "Destination index."),
             ("lookback_days", "Days of history to fetch each run."),
         ):
             arg = Argument(name)
