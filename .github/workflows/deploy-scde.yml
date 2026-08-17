@@ -1,0 +1,71 @@
+name: Deploy to SCDE
+
+# Manual, on demand: build the add-on and install it onto the SCDE stack via
+# ACS. Pilot consumer of the reusable deploy-scde workflow — needs only the
+# OP_SERVICE_ACCOUNT_TOKEN repo secret (stack creds live in 1Password).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          SHORT_COMMIT_HASH=$(git rev-parse --short HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            TAG_VERSION="1.0.0"
+          fi
+          VERSION_WITH_HASH="${TAG_VERSION}+${SHORT_COMMIT_HASH}"
+          echo "VERSION_WITH_HASH=${VERSION_WITH_HASH}" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=${TAG_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Install UCC framework
+        run: pip install --upgrade splunk-add-on-ucc-framework
+
+      - name: Build add-on (ucc-gen)
+        shell: bash
+        run: |
+          ucc-gen build --source package --ta-version "${{ steps.version.outputs.TAG_VERSION }}"
+          # Normalise permissions — AppInspect rejects 775/664. App dirs 755, files 644.
+          mkdir -p stage
+          cp -r output/TA-uk-open-data stage/TA-uk-open-data
+          find stage/TA-uk-open-data -type d -exec chmod 755 {} +
+          find stage/TA-uk-open-data -type f -exec chmod 644 {} +
+
+      - name: Generate package tarball
+        shell: bash
+        run: |
+          mkdir -p dist
+          cd stage
+          tar -czf ../dist/TA-uk-open-data-${{ steps.version.outputs.VERSION_WITH_HASH }}.tar.gz TA-uk-open-data/
+          cd ..
+          ls -la dist/
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  deploy-scde:
+    needs: package
+    uses: livehybrid/deploy-splunk-app-action/.github/workflows/deploy-scde.yml@main
+    secrets:
+      op_service_account_token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
