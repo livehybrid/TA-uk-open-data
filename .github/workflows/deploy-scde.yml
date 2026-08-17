@@ -6,6 +6,11 @@ name: Deploy to SCDE
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even while SCDE deploys are toggled off (retest the Splunk ACS fix)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -67,5 +72,7 @@ jobs:
   deploy-scde:
     needs: package
     uses: livehybrid/deploy-splunk-app-action/.github/workflows/deploy-scde.yml@main
+    with:
+      force: ${{ inputs.force }}
     secrets:
       op_service_account_token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
