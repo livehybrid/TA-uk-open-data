@@ -7,9 +7,9 @@ import os
 import re
 import sys
 import time
+import urllib.request
 from calendar import timegm
 
-import requests
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
 ST = "nhs:ae:monthly"
@@ -18,6 +18,20 @@ MONTHS = {m: i + 1 for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
      "august", "september", "october", "november", "december"])}
 UA = {"User-Agent": "Mozilla/5.0 (TA-uk-open-data NHS A&E modular input)"}
+
+
+def _fetch_text(url, timeout):
+    """Fetch a URL and return its decoded body using the standard library.
+
+    Avoids ``requests``: the modular input runs under Splunk's bundled Python
+    (3.9 on Splunk 10.0/10.1), and modern ``requests`` releases use PEP 604
+    ``X | Y`` annotations that are evaluated at import time and fail on < 3.10,
+    which crashes scheme introspection and blocks the input from registering.
+    """
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed england.nhs.uk endpoints
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return resp.read().decode(charset, errors="replace")
 
 
 def _num(v):
@@ -46,7 +60,12 @@ class NhsAE(Script):
         scheme.use_external_validation = False
         scheme.streaming_mode_xml = True
         scheme.use_single_instance = False
-        for name, desc in (("index", "Destination index."), ("financial_years", "Comma-separated FY pages, e.g. 2025-26,2026-27.")):
+        # NB: do not declare "index" (or interval/host/source/sourcetype) as a
+        # scheme argument — Splunk supplies those natively. Declaring "index"
+        # makes splunkd reject the whole kind at startup ("Endpoint argument
+        # 'index' is an internal argument"), so the modular input never
+        # registers. The index still comes from inputs.conf.
+        for name, desc in (("financial_years", "Comma-separated FY pages, e.g. 2025-26,2026-27."),):
             arg = Argument(name)
             arg.data_type = Argument.data_type_string
             arg.description = desc
@@ -74,13 +93,13 @@ class NhsAE(Script):
 
     def _csv_links(self, fy):
         try:
-            html = requests.get(BASE % fy, headers=UA, timeout=40).text
+            html = _fetch_text(BASE % fy, 40)
         except Exception:
             return []
         return list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
 
     def _emit_csv(self, url, index, ew, name):
-        raw = requests.get(url, headers=UA, timeout=60).text
+        raw = _fetch_text(url, 60)
         rows = list(csv.reader(io.StringIO(raw)))
         if len(rows) < 2:
             return 0, None

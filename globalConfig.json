@@ -214,6 +214,9 @@
         "version": "1.0.2",
         "displayName": "UK Open Data — Carbon Intensity & NHS A&E",
         "schemaVersion": "0.0.10",
+        "supportedPythonVersion": [
+            "3.9"
+        ],
         "supportedThemes": [
             "light",
             "dark"

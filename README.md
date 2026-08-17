@@ -15,6 +15,25 @@ so they are safe to run on any interval without creating duplicates.
 
 ---
 
+## Compatibility
+
+| Attribute | Value |
+|-----------|-------|
+| **Add-on version** | 1.0.2 |
+| **Tested against** | Splunk Enterprise 10.0, Python 3.9 (real Splunk in Docker, on every CI run) |
+| **Python runtime** | 3.9, Splunk's long-term-support runtime |
+| **Expected compatible** | Splunk Enterprise and Cloud 9.3+ and 10.x (any release on the Python 3.9 runtime) |
+| **Deployment roles** | Standalone, Distributed, Search Head Clustering |
+| **AppInspect** | Passes the `cloud`, `future` and `private_victoria` tag sets |
+
+Splunk 9.3 through 10.1 default to Python 3.9, and 3.9 stays the LTS runtime on
+10.2 and later, so an add-on that is clean on 3.9 runs unchanged across that
+whole range. This add-on is validated on 3.9 and pins its vendored libraries to
+versions that stay 3.9-clean. It is not yet validated on the opt-in Python 3.13
+runtime introduced in Splunk 10.2.
+
+---
+
 ## Installation
 
 1. In Splunk Web: **Apps → Manage Apps → Install app from file** and upload
