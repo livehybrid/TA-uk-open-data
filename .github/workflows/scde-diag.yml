@@ -39,11 +39,20 @@ jobs:
           user=$(echo "$item" | jq -r '[.fields[] | select(.id=="username" or .purpose=="USERNAME") | .value][0] // empty')
           pass=$(echo "$item" | jq -r '[.fields[] | select(.id=="password" or .purpose=="PASSWORD") | .value][0] // empty')
           url=$(echo "$item"  | jq -r '.urls[0].href // empty')
+          if [ -z "$url" ]; then
+            url=$(echo "$item" | jq -r '[.fields[] | select((.label // .id // "") | test("^(url|website|hostname|stack(_?url)?)$"; "i")) | .value][0] // empty')
+          fi
           url=${url#https://}; url=${url#http://}; url=${url%%/*}
-          if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$url" ]; then
+          if [ -z "$url" ]; then
+            # 2026-08-20 evening: the 1P item lost its website entry (0 urls,
+            # no url-ish field). Fall back to the stack active all day.
+            url="scde-2qnooeq429cdkmt46.splunkcloud.com"
+            echo "::warning::1P item has no website/url field — falling back to ${url}"
+          fi
+          if [ -z "$user" ] || [ -z "$pass" ]; then
             echo "field labels present (values withheld):"
             echo "$item" | jq -r '.fields[] | "  id=\(.id // "-") label=\(.label // "-") purpose=\(.purpose // "-")"'
-            echo "url entries: $(echo "$item" | jq -r '.urls | length')"
+            exit 1
           fi
           echo "::add-mask::$pass"
           {
