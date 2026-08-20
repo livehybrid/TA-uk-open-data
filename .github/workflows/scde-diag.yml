@@ -1,0 +1,151 @@
+name: SCDE cluster/token diagnostics
+
+# One-off diagnostic: is the SCDE "standalone" stack actually multiple SH
+# instances, and do auth tokens replicate between them? Evidence for the
+# ACS install decrypt lottery (see SCDE-ACS-INSTALL-BLOCKER.md 2026-08-20).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install 1Password CLI
+        run: |
+          curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.24.0/op_linux_amd64_v2.24.0.zip
+          sudo unzip -od /usr/local/bin/ op.zip
+          rm op.zip
+          sudo chmod +x /usr/local/bin/op
+
+      - name: Load stack credentials from 1Password
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          item=$(op item get "splunk-cloud-stack" --vault "cicd" --format json)
+          user=$(echo "$item" | jq -r '[.fields[] | select(.id=="username" or .purpose=="USERNAME") | .value][0] // empty')
+          pass=$(echo "$item" | jq -r '[.fields[] | select(.id=="password" or .purpose=="PASSWORD") | .value][0] // empty')
+          url=$(echo "$item"  | jq -r '.urls[0].href // empty')
+          url=${url#https://}; url=${url#http://}; url=${url%%/*}
+          echo "::add-mask::$pass"
+          {
+            echo "STACK_URL=$url"
+            echo "STACK_USER=$user"
+            echo "STACK_PASS=$pass"
+            echo "ACS_STACK=${url%.splunkcloud.com}"
+          } >> "$GITHUB_ENV"
+
+      - name: Open 8089 via ACS ip-allowlist
+        run: |
+          TOK_RESP=$(curl -sS -u "${STACK_USER}:${STACK_PASS}" \
+            -X POST "https://admin.splunk.com/${ACS_STACK}/adminconfig/v2/tokens" \
+            -H 'Content-Type: application/json' \
+            -d "{\"user\":\"${STACK_USER}\",\"audience\":\"scde-diag-cp\",\"type\":\"ephemeral\",\"expiresOn\":\"+1h\"}")
+          CP_TOKEN=$(echo "$TOK_RESP" | jq -r '.token // empty')
+          [ -z "$CP_TOKEN" ] && { echo "::error::cp token mint failed"; exit 1; }
+          echo "::add-mask::${CP_TOKEN}"
+          echo "ACS_CP_TOKEN=${CP_TOKEN}" >> "$GITHUB_ENV"
+          RUNNER_IP=$(curl -sSf https://api.ipify.org)
+          echo "RUNNER_IP=${RUNNER_IP}" >> "$GITHUB_ENV"
+          AL="https://admin.splunk.com/${ACS_STACK}/adminconfig/v2/access/search-api/ipallowlists"
+          echo "ALLOWLIST_URL=$AL" >> "$GITHUB_ENV"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${CP_TOKEN}" -H 'Content-Type: application/json' \
+            -d "{\"subnets\":[\"${RUNNER_IP}/32\"]}" "$AL")
+          echo "allowlist add: HTTP $code"
+          tries=0
+          until curl -k -sS -m 5 -o /dev/null "https://${STACK_URL}:8089/services/server/info"; do
+            tries=$((tries+1)); [ "$tries" -ge 36 ] && { echo "::error::8089 unreachable"; exit 1; }
+            echo "waiting for allowlist ($tries/36)"; sleep 20
+          done
+          echo "8089 open"
+
+      - name: "D1: serverName + roles distribution over 24 polls"
+        run: |
+          for i in $(seq 1 24); do
+            j=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+              "https://${STACK_URL}:8089/services/server/info?output_mode=json" || true)
+            echo "$j" | jq -r '.entry[0].content | "poll='"$i"' serverName=\(.serverName) guid=\(.guid[:8]) roles=\(.server_roles|join(",")) startup=\(.startup_time // "?")"' 2>/dev/null || echo "poll=$i FAILED"
+            sleep 2
+          done
+
+      - name: "D2: SHC endpoints (expect 404/error on true standalone)"
+        run: |
+          for ep in shcluster/status "shcluster/member/members" "shcluster/captain/members" shcluster/config; do
+            code=$(curl -k -sS -o /tmp/shc.json -w '%{http_code}' -u "${STACK_USER}:${STACK_PASS}" \
+              "https://${STACK_URL}:8089/services/${ep}?output_mode=json")
+            echo "== /services/${ep}: HTTP $code"
+            head -c 500 /tmp/shc.json; echo
+          done
+
+      - name: "D3: member enumeration via | rest splunk_server=*"
+        run: |
+          curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            "https://${STACK_URL}:8089/services/search/jobs" \
+            -d exec_mode=oneshot -d output_mode=json \
+            --data-urlencode 'search=| rest /services/server/info splunk_server=* | fields splunk_server serverName guid server_roles startup_time' \
+            | jq -r '.results[] | "member: splunk_server=\(.splunk_server) serverName=\(.serverName) guid=\(.guid[:8]) roles=\(.server_roles) startup=\(.startup_time)"' || true
+          echo "== distributed search peers =="
+          curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            "https://${STACK_URL}:8089/services/search/distributed/peers?output_mode=json&count=0" \
+            | jq -r '.entry[]? | "peer: \(.name) status=\(.content.status) guid=\(.content.guid[:8])"' || true
+
+      - name: "D4: token replication — mint then poll visibility 12x"
+        run: |
+          exp=$(date -u -d '+30 minutes' '+%Y-%m-%dT%H:%M:%S+00:00')
+          resp=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            -X POST "https://${STACK_URL}:8089/services/authorization/tokens?output_mode=json" \
+            -d "name=${STACK_USER}" -d "audience=diag-replication-probe" -d "expires_on=${exp}")
+          TID=$(echo "$resp" | jq -r '.entry[0].content.id // empty')
+          [ -z "$TID" ] && { echo "mint failed:"; echo "$resp" | head -c 400; exit 0; }
+          echo "minted token id=${TID:0:12}... audience=diag-replication-probe"
+          for i in $(seq 1 12); do
+            l=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+              "https://${STACK_URL}:8089/services/authorization/tokens?output_mode=json&count=0&name=${STACK_USER}" || true)
+            n=$(echo "$l" | jq -r '.entry | length' 2>/dev/null)
+            here=$(echo "$l" | jq -r --arg t "$TID" '[.entry[]?.content.id] | index($t) != null' 2>/dev/null)
+            sn=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+              "https://${STACK_URL}:8089/services/server/info?output_mode=json" \
+              | jq -r '.entry[0].content.serverName' | cut -d. -f1)
+            echo "poll=$i servedBy=$sn tokens=$n freshTokenVisible=$here"
+            sleep 2
+          done
+          echo "== per-member token counts via | rest =="
+          curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            "https://${STACK_URL}:8089/services/search/jobs" \
+            -d exec_mode=oneshot -d output_mode=json \
+            --data-urlencode 'search=| rest /services/authorization/tokens splunk_server=* count=0 | stats count by splunk_server' \
+            | jq -r '.results[] | "tokens on \(.splunk_server): \(.count)"' || true
+
+      - name: "D5: _internal replication + token errors (48h)"
+        run: |
+          curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            "https://${STACK_URL}:8089/services/search/jobs" \
+            -d exec_mode=oneshot -d output_mode=json \
+            --data-urlencode 'search=search index=_internal source=*splunkd.log* earliest=-48h (log_level=ERROR OR log_level=WARN) (component=TokenAuth* OR component=ConfReplication* OR component=SHC* OR "decrypt" OR "replicat") | stats count by host component log_level | sort -count | head 40' \
+            | jq -r '.results[] | "\(.count)x \(.host) \(.component) \(.log_level)"' || true
+          echo "== sample decrypt/token messages =="
+          curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+            "https://${STACK_URL}:8089/services/search/jobs" \
+            -d exec_mode=oneshot -d output_mode=json \
+            --data-urlencode 'search=search index=_internal source=*splunkd.log* earliest=-48h ("Failed to decrypt" OR component=TokenAuth*) | head 10 | table _time host component log_level _raw' \
+            | jq -r '.results[] | "\(._time) \(.host) [\(.component)/\(.log_level)] \((._raw|tostring)[:220])"' || true
+
+      - name: "D6: ACS probe of all three SH prefixes seen 2026-08-20"
+        run: |
+          for pfx in sh-i-0c63ea98ba25b7436 sh-i-0c8eb7d8a78b17b75 sh-i-0dea0b08af6761003; do
+            code=$(curl -sS -o /tmp/p.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${ACS_CP_TOKEN}" \
+              "https://admin.splunk.com/${pfx}.${ACS_STACK}/adminconfig/v2/apps/victoria?count=1")
+            echo "targeted GET via ${pfx}: HTTP $code $(head -c 120 /tmp/p.json)"
+          done
+
+      - name: Remove runner IP from allowlist
+        if: always()
+        run: |
+          curl -sS -o /dev/null -w 'allowlist remove: HTTP %{http_code}\n' -X DELETE \
+            -H "Authorization: Bearer ${ACS_CP_TOKEN}" -H 'Content-Type: application/json' \
+            -d "{\"subnets\":[\"${RUNNER_IP}/32\"]}" "${ALLOWLIST_URL}" || true
