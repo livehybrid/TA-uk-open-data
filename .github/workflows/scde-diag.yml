@@ -40,12 +40,24 @@ jobs:
 
       - name: Open 8089 via ACS ip-allowlist
         run: |
-          TOK_RESP=$(curl -sS -u "${STACK_USER}:${STACK_PASS}" \
-            -X POST "https://admin.splunk.com/${ACS_STACK}/adminconfig/v2/tokens" \
-            -H 'Content-Type: application/json' \
-            -d "{\"user\":\"${STACK_USER}\",\"audience\":\"scde-diag-cp\",\"type\":\"ephemeral\",\"expiresOn\":\"+1h\"}")
-          CP_TOKEN=$(echo "$TOK_RESP" | jq -r '.token // empty')
-          [ -z "$CP_TOKEN" ] && { echo "::error::cp token mint failed"; exit 1; }
+          if [ -z "$STACK_USER" ] || [ -z "$STACK_PASS" ] || [ -z "$STACK_URL" ]; then
+            echo "::error::creds not loaded from 1P"; exit 1
+          fi
+          # SCDE hibernates when idle; ACS mints can fail until it wakes. Poke
+          # splunkweb (public 443) to trigger wake, then retry the mint.
+          CP_TOKEN=""
+          for i in $(seq 1 12); do
+            curl -k -sS -m 20 -o /dev/null -w 'splunkweb probe: HTTP %{http_code}\n' "https://${STACK_URL}/en-US/account/login" || true
+            TOK_RESP=$(curl -sS -u "${STACK_USER}:${STACK_PASS}" \
+              -X POST "https://admin.splunk.com/${ACS_STACK}/adminconfig/v2/tokens" \
+              -H 'Content-Type: application/json' \
+              -d "{\"user\":\"${STACK_USER}\",\"audience\":\"scde-diag-cp\",\"type\":\"ephemeral\",\"expiresOn\":\"+1h\"}")
+            CP_TOKEN=$(echo "$TOK_RESP" | jq -r '.token // empty')
+            [ -n "$CP_TOKEN" ] && break
+            echo "mint attempt $i failed; response: $(echo "$TOK_RESP" | jq 'del(.token)' 2>/dev/null || echo "$TOK_RESP" | head -c 300)"
+            sleep 30
+          done
+          [ -z "$CP_TOKEN" ] && { echo "::error::cp token mint failed after retries"; exit 1; }
           echo "::add-mask::${CP_TOKEN}"
           echo "ACS_CP_TOKEN=${CP_TOKEN}" >> "$GITHUB_ENV"
           RUNNER_IP=$(curl -sSf https://api.ipify.org)
