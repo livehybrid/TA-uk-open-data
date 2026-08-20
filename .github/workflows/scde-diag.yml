@@ -140,7 +140,7 @@ jobs:
           echo "minted token id=${TID:0:12}... audience=diag-replication-probe"
           for i in $(seq 1 12); do
             l=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
-              "https://${STACK_URL}:8089/services/authorization/tokens?output_mode=json&count=0&name=${STACK_USER}" || true)
+              "https://${STACK_URL}:8089/services/authorization/tokens?output_mode=json&count=0" || true)
             n=$(echo "$l" | jq -r '.entry | length' 2>/dev/null)
             here=$(echo "$l" | jq -r --arg t "$TID" '[.entry[]?.content.id] | index($t) != null' 2>/dev/null)
             sn=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
@@ -178,6 +178,45 @@ jobs:
               "https://admin.splunk.com/${pfx}.${ACS_STACK}/adminconfig/v2/apps/victoria?count=1")
             echo "targeted GET via ${pfx}: HTTP $code $(head -c 120 /tmp/p.json)"
           done
+
+      - name: "D7: who mints — decode JWT claims per mint route"
+        run: |
+          decode() {  # stdin = jwt; prints selected claims, never the token
+            python3 -c 'import base64,json,sys; t=sys.stdin.read().strip().split("."); dec=lambda s: json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); h=dec(t[0]); p=dec(t[1]); keep={k:p.get(k) for k in ("iss","sub","aud","idp","iat","exp","ttyp","roles") if k in p}; keep.update(jti8=(p.get("jti") or "")[:8]); print(json.dumps({"header":h,"claims":keep}))'
+          }
+          echo "== mint via ACS targeted tokens endpoint, per member =="
+          for pfx in sh-i-0c63ea98ba25b7436 sh-i-0c8eb7d8a78b17b75 sh-i-0dea0b08af6761003; do
+            r=$(curl -sS -u "${STACK_USER}:${STACK_PASS}" \
+              -X POST "https://admin.splunk.com/${pfx}.${ACS_STACK}/adminconfig/v2/tokens" \
+              -H 'Content-Type: application/json' \
+              -d "{\"user\":\"${STACK_USER}\",\"audience\":\"diag-mint-${pfx: -4}\",\"type\":\"ephemeral\",\"expiresOn\":\"+15m\"}")
+            tok=$(echo "$r" | jq -r '.token // empty')
+            if [ -n "$tok" ]; then
+              echo "::add-mask::$tok"
+              echo "target=${pfx} -> $(printf '%s' "$tok" | decode)"
+            else
+              echo "target=${pfx} -> mint FAILED: $(echo "$r" | head -c 200)"
+            fi
+          done
+          echo "== mint via LB 8089, 4x (servedBy at mint time) =="
+          exp=$(date -u -d '+15 minutes' '+%Y-%m-%dT%H:%M:%S+00:00')
+          for i in 1 2 3 4; do
+            sn=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+              "https://${STACK_URL}:8089/services/server/info?output_mode=json" \
+              | jq -r '.entry[0].content.serverName' | cut -d. -f1)
+            r=$(curl -k -sS -u "${STACK_USER}:${STACK_PASS}" \
+              -X POST "https://${STACK_URL}:8089/services/authorization/tokens?output_mode=json" \
+              -d "name=${STACK_USER}" -d "audience=diag-mint-lb-$i" -d "expires_on=${exp}")
+            tok=$(echo "$r" | jq -r '.entry[0].content.token // empty')
+            if [ -n "$tok" ]; then
+              echo "::add-mask::$tok"
+              echo "lb-mint $i (servedBy~$sn) -> $(printf '%s' "$tok" | decode)"
+            else
+              echo "lb-mint $i FAILED: $(echo "$r" | head -c 200)"
+            fi
+          done
+          echo "== the ACS un-targeted CP token from step 3 =="
+          printf '%s' "$ACS_CP_TOKEN" | decode
 
       - name: Remove runner IP from allowlist
         if: always()
