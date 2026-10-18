@@ -47,7 +47,7 @@ jobs:
       - name: Build add-on (ucc-gen)
         shell: bash
         run: |
-          ucc-gen build --source package --ta-version "${{ steps.version.outputs.TAG_VERSION }}"
+          ucc-gen build --source package --ta-version "${{ steps.version.outputs.VERSION_WITH_HASH }}"
           # Normalise permissions — AppInspect rejects 775/664. App dirs 755, files 644.
           mkdir -p stage
           cp -r output/TA-uk-open-data stage/TA-uk-open-data
