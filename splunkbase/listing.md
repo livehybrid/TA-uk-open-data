@@ -5,17 +5,21 @@
 
 ## Short Description (max 380 chars)
 
-Two modular inputs for open UK datasets, with a configuration UI. Ingests UK Carbon Intensity (api.carbonintensity.org.uk — half-hourly national intensity + generation mix) and NHS England monthly A&E attendance statistics. No API key. Idempotent, checkpoint-based, safe to run on any interval.
+Four modular inputs for open UK datasets, with a configuration UI. UK Carbon Intensity (half-hourly national and regional intensity with generation mix), NHS England monthly A&E statistics (attendances, 4-hour performance, 12-hour waits, admissions) and ambulance response times. No API key. Idempotent and checkpoint-based.
 
 ## Summary (max 3000 chars)
 
-**UK Open Data** is a UCC-framework add-on that brings two well-known open UK datasets into Splunk with no API key and no external dependencies beyond outbound HTTPS.
+**UK Open Data** is a UCC-framework add-on that brings well-known open UK datasets into Splunk with no API key and no external dependencies beyond outbound HTTPS.
 
 **Carbon Intensity** — polls the National Grid ESO Carbon Intensity API (`api.carbonintensity.org.uk`) and indexes, per half-hourly settlement period, the national forecast/actual gCO₂/kWh and intensity band (`carbonintensity:national`) plus the generation mix by fuel type (`carbonintensity:generation`). Ideal for carbon-aware scheduling, ESG dashboards and "greenest time to run" decisions.
 
 **NHS A&E (monthly)** — scans the NHS England "A&E Attendances and Emergency Admissions" pages, downloads each monthly CSV you haven't already loaded, and indexes one event per provider plus a national TOTAL row (`nhs:ae:monthly`) — type 1/2/other attendances, 4-hour performance and over-4hr counts. Great for healthcare performance and public-sector analytics.
 
-Both inputs are **idempotent**: they checkpoint what they've already indexed, so they're safe to run on any interval without creating duplicates. Carbon re-emits only un-settled recent periods until their actual value lands; NHS only loads months it hasn't seen.
+**Carbon Intensity (regional)**: the same API's regional forecast and generation mix for each of the 14 GB distribution regions plus England, Scotland, Wales and GB (`carbonintensity:regional`), one event per region per finished half hour.
+
+**NHS Ambulance (monthly)**: NHS England Ambulance Quality Indicators (AmbSYS): 999 calls, category 1-4 mean and 90th centile response times, outcomes and hospital handovers, monthly per ambulance trust, region and England (`nhs:ambulance:monthly`).
+
+All inputs are **idempotent**: they checkpoint what they've already indexed, so they're safe to run on any interval without creating duplicates. Carbon re-emits only un-settled recent periods until their actual value lands; NHS only loads months it hasn't seen.
 
 Built with the Splunk UCC framework — full configuration UI, per-input index/interval settings, and standard logging.
 

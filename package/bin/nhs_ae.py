@@ -1,5 +1,6 @@
 import import_declare_test  # noqa: F401  (path bootstrap — must be first)
 
+import configparser
 import csv
 import io
 import json
@@ -20,6 +21,38 @@ MONTHS = {m: i + 1 for i, m in enumerate(
 UA = {"User-Agent": "Mozilla/5.0 (TA-uk-open-data NHS A&E modular input)"}
 
 
+NHS_HOST = "https://www.england.nhs.uk"
+ENDPOINTS_CONF = "ta_uk_open_data_endpoints"
+
+
+def nhs_base():
+    """Where www.england.nhs.uk is fetched from: the real site unless overridden.
+
+    An optional app conf, ta_uk_open_data_endpoints.conf, stanza [nhs], key
+    base_url, replaces the scheme and host of every NHS England URL (the pages
+    and the CSV links on them). Read from default/ then local/ of this app on
+    every call. Absent or empty means the real site. Used for a mirror or proxy,
+    and by CI, which replays a snapshot because the real site returns an empty
+    response to GitHub-hosted runners.
+    """
+    app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    conf = configparser.ConfigParser(interpolation=None)
+    conf.read([os.path.join(app, d, ENDPOINTS_CONF + ".conf") for d in ("default", "local")])
+    value = conf.get("nhs", "base_url", fallback="").strip()
+    if not value:
+        return NHS_HOST
+    if not re.match(r"^https?://[^/]+", value):
+        raise ValueError("%s.conf [nhs] base_url must be an http(s) URL, got %r" % (ENDPOINTS_CONF, value))
+    return value.rstrip("/")
+
+
+def nhs_url(url):
+    base = nhs_base()
+    if base != NHS_HOST and url.startswith(NHS_HOST + "/"):
+        return base + url[len(NHS_HOST):]
+    return url
+
+
 def _fetch_text(url, timeout):
     """Fetch a URL and return its decoded body using the standard library.
 
@@ -27,11 +60,22 @@ def _fetch_text(url, timeout):
     (3.9 on Splunk 10.0/10.1), and modern ``requests`` releases use PEP 604
     ``X | Y`` annotations that are evaluated at import time and fail on < 3.10,
     which crashes scheme introspection and blocks the input from registering.
+
+    An empty body or HTTP 202 raises. www.england.nhs.uk answers some hosts
+    (GitHub-hosted runners, so probably other cloud ranges too) with an empty
+    page, which used to read as "no CSVs this month" and fail silently.
     """
+    url = nhs_url(url)
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed england.nhs.uk endpoints
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - england.nhs.uk or its configured mirror
+        status = getattr(resp, "status", 200)
+        body = resp.read()
+        if status == 202 or not body:
+            waf = resp.headers.get("x-amzn-waf-action")
+            raise RuntimeError("%s returned an empty response (HTTP %s%s); the site may be blocking this host"
+                               % (url, status, ", x-amzn-waf-action=" + waf if waf else ""))
         charset = resp.headers.get_content_charset() or "utf-8"
-        return resp.read().decode(charset, errors="replace")
+        return body.decode(charset, errors="replace")
 
 
 def _num(v):
@@ -39,6 +83,31 @@ def _num(v):
         return int(re.sub(r"[^0-9-]", "", str(v)) or 0)
     except ValueError:
         return 0
+
+
+# The other columns of the monthly CSV, by their exact (lower-cased) header.
+# Booked appointments count towards the NHS headline "all attendances" and its
+# 4-hour figure; the decision-to-admit waits are the "trolley waits".
+EXTRA_COLUMNS = (
+    ("type1_booked_attendances", "a&e attendances booked appointments type 1"),
+    ("type2_booked_attendances", "a&e attendances booked appointments type 2"),
+    ("other_booked_attendances", "a&e attendances booked appointments other department"),
+    ("type2_over4hrs", "attendances over 4hrs type 2"),
+    ("other_over4hrs", "attendances over 4hrs other department"),
+    ("type1_booked_over4hrs", "attendances over 4hrs booked appointments type 1"),
+    ("type2_booked_over4hrs", "attendances over 4hrs booked appointments type 2"),
+    ("other_booked_over4hrs", "attendances over 4hrs booked appointments other department"),
+    ("dta_4to12hr_waits", "patients who have waited 4-12 hs from dta to admission"),
+    ("dta_12hr_plus_waits", "patients who have waited 12+ hrs from dta to admission"),
+    ("emergency_admissions_type1", "emergency admissions via a&e - type 1"),
+    ("emergency_admissions_type2", "emergency admissions via a&e - type 2"),
+    ("emergency_admissions_other", "emergency admissions via a&e - other a&e department"),
+    ("other_emergency_admissions", "other emergency admissions"),
+)
+
+
+def _norm_header(h):
+    return re.sub(r"\s+", " ", h.replace("\ufeff", "")).strip().lower()
 
 
 def _period_from_url(url):
@@ -91,19 +160,27 @@ class NhsAE(Script):
         except Exception:
             pass
 
-    def _csv_links(self, fy):
+    def _csv_links(self, fy, ew=None, name=""):
         try:
             html = _fetch_text(BASE % fy, 40)
-        except Exception:
+        except Exception as exc:
+            # Logged, not swallowed: a blocked or moved page used to make the
+            # input do nothing with no trace at all.
+            if ew is not None:
+                ew.log(EventWriter.ERROR, "nhs_ae[%s] fetch failed for %s: %s" % (name, BASE % fy, exc))
             return []
-        return list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
+        links = list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
+        if not links and ew is not None:
+            ew.log(EventWriter.WARN, "nhs_ae[%s] no CSV links on %s (%d bytes)" % (name, BASE % fy, len(html)))
+        return links
 
     def _emit_csv(self, url, index, ew, name):
         raw = _fetch_text(url, 60)
         rows = list(csv.reader(io.StringIO(raw)))
         if len(rows) < 2:
             return 0, None
-        hdr = [h.strip().lower() for h in rows[0]]
+        hdr = [_norm_header(h) for h in rows[0]]
+        extra_idx = [(name, hdr.index(h)) for name, h in EXTRA_COLUMNS if h in hdr]
 
         def col(*subs):
             for i, h in enumerate(hdr):
@@ -131,13 +208,26 @@ class NhsAE(Script):
             ev.sourceType = ST
             ev.index = index
             ev.time = "%d" % _month_epoch(period)
-            ev.data = json.dumps({
+            body = {
                 "period": period, "org_code": r[c_org].strip(),
                 "org_name": r[c_name].strip() if c_name >= 0 else "",
                 "region": "TOTAL" if is_total else (r[c_parent].strip() if c_parent >= 0 else ""),
                 "type1_attendances": t1, "type1_over4hrs": t1o,
                 "type1_within4hr_pct": (round(1000 * (t1 - t1o) / t1) / 10) if t1 > 0 else None,
-                "type2_attendances": t2, "other_attendances": oth, "total_attendances": t1 + t2 + oth})
+                "type2_attendances": t2, "other_attendances": oth, "total_attendances": t1 + t2 + oth}
+            for field, i in extra_idx:
+                body[field] = _num(r[i]) if i < len(r) else None
+            booked = [body.get(k) for k in ("type1_booked_attendances", "type2_booked_attendances",
+                                             "other_booked_attendances")]
+            over = [t1o] + [body.get(k) for k in ("type2_over4hrs", "other_over4hrs", "type1_booked_over4hrs",
+                                                  "type2_booked_over4hrs", "other_booked_over4hrs")]
+            if None not in booked and None not in over:
+                # The NHS headline: every attendance, booked appointments included.
+                all_att = t1 + t2 + oth + sum(booked)
+                body["all_attendances"] = all_att
+                body["all_over4hrs"] = sum(over)
+                body["all_within4hr_pct"] = (round(1000 * (all_att - sum(over)) / all_att) / 10) if all_att > 0 else None
+            ev.data = json.dumps(body)
             ew.write_event(ev)
             n += 1
         return n, period
@@ -155,7 +245,7 @@ class NhsAE(Script):
             loaded = self._load_cp(cp_path)
             total = 0
             for fy in fys:
-                for url in self._csv_links(fy):
+                for url in self._csv_links(fy, ew, name):
                     period = _period_from_url(url)
                     if period and period in loaded:
                         continue
@@ -163,6 +253,7 @@ class NhsAE(Script):
                         n, period = self._emit_csv(url, index, ew, name)
                         if period:
                             loaded.add(period)
+                            self._save_cp(cp_path, loaded)  # per month, not only at the end
                             total += n
                             ew.log(EventWriter.INFO, "nhs_ae[%s] loaded %s (%d rows) from %s" % (name, period, n, url))
                     except Exception as exc:

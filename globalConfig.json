@@ -42,7 +42,7 @@
         },
         "inputs": {
             "title": "Inputs",
-            "description": "Modular inputs for UK Carbon Intensity (api.carbonintensity.org.uk) and NHS England A&E monthly statistics. Both are open data, no API key.",
+            "description": "Modular inputs for UK Carbon Intensity (api.carbonintensity.org.uk, national and regional) and NHS England A&E and ambulance monthly statistics. All open data, no API key.",
             "table": {
                 "actions": [
                     "edit",
@@ -139,6 +139,90 @@
                     ]
                 },
                 {
+                    "name": "carbon_intensity_regional",
+                    "title": "Carbon Intensity (regional)",
+                    "description": "Poll the UK Carbon Intensity API and index intensity + generation mix for each GB region (half-hourly).",
+                    "entity": [
+                        {
+                            "type": "text",
+                            "label": "Name",
+                            "field": "name",
+                            "required": true,
+                            "help": "Unique input name (letters, digits, underscores).",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Name must begin with a letter and contain only letters, digits and underscores.",
+                                    "pattern": "^[a-zA-Z]\\w*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-100.",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                }
+                            ]
+                        },
+                        {
+                            "type": "interval",
+                            "field": "interval",
+                            "label": "Interval (s)",
+                            "required": true,
+                            "defaultValue": "1800",
+                            "help": "Poll interval in seconds. 1800 (30 min) matches the half-hourly periods; each finished period is written once."
+                        },
+                        {
+                            "type": "text",
+                            "field": "index",
+                            "label": "Index",
+                            "required": true,
+                            "defaultValue": "carbonintensity",
+                            "help": "Destination index. Events are written with sourcetype carbonintensity:regional (one per region per half hour).",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "field": "lookback_days",
+                            "label": "Lookback (days)",
+                            "required": true,
+                            "defaultValue": "1",
+                            "help": "History to fetch on the first run (1-13; the regional API refuses ranges over 14 days). Later runs resume from the checkpoint.",
+                            "validators": [
+                                {
+                                    "type": "number",
+                                    "errorMsg": "1-13 days.",
+                                    "range": [
+                                        1,
+                                        13
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "field": "regions",
+                            "label": "Regions",
+                            "required": false,
+                            "defaultValue": "",
+                            "help": "Comma-separated region ids, empty for all 18: 1-14 the DNO regions (e.g. 13 London), 15 England, 16 Scotland, 17 Wales, 18 GB.",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Comma-separated numbers 1-18.",
+                                    "pattern": "^\\s*((1[0-8]|[1-9])\\s*(,\\s*(1[0-8]|[1-9])\\s*)*)?$"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
                     "name": "nhs_ae",
                     "title": "NHS A&E (monthly)",
                     "description": "Download NHS England monthly A&E attendance CSVs and index any months not already loaded.",
@@ -200,6 +284,72 @@
                                     "errorMsg": "Length 1-200.",
                                     "minLength": 1,
                                     "maxLength": 200
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "nhs_ambulance",
+                    "title": "NHS Ambulance (monthly)",
+                    "description": "Download the NHS England Ambulance Quality Indicators (AmbSYS) time series and index any months not already loaded.",
+                    "entity": [
+                        {
+                            "type": "text",
+                            "label": "Name",
+                            "field": "name",
+                            "required": true,
+                            "help": "Unique input name (letters, digits, underscores).",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Name must begin with a letter and contain only letters, digits and underscores.",
+                                    "pattern": "^[a-zA-Z]\\w*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-100.",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                }
+                            ]
+                        },
+                        {
+                            "type": "interval",
+                            "field": "interval",
+                            "label": "Interval (s)",
+                            "required": true,
+                            "defaultValue": "86400",
+                            "help": "Check interval. NHS publishes monthly, so once a day is plenty."
+                        },
+                        {
+                            "type": "text",
+                            "field": "index",
+                            "label": "Index",
+                            "required": true,
+                            "defaultValue": "nhsengland",
+                            "help": "Destination index. Events are written with sourcetype nhs:ambulance:monthly (one per organisation per month).",
+                            "validators": [
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length 1-80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "field": "since",
+                            "label": "Since (YYYY-MM)",
+                            "required": false,
+                            "defaultValue": "",
+                            "help": "Earliest month to load. Empty loads the whole series, from August 2017 (about 2,100 events).",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "YYYY-MM, e.g. 2024-04.",
+                                    "pattern": "^(\\d{4}-(0[1-9]|1[0-2]))?$"
                                 }
                             ]
                         }

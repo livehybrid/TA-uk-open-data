@@ -18,9 +18,31 @@ services:
       # the host updates the running container. The stage/ copy is a throwaway
       # test build (widened perms), never the packaged artefact.
       - ../stage/TA-uk-open-data:/opt/splunk/etc/apps/TA-uk-open-data
+    depends_on:
+      mocknhs:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsk", "https://localhost:8089/services/server/info", "-u", "admin:${SPLUNK_PASSWORD:-Changeme1!}"]
       interval: 10s
       timeout: 5s
       retries: 40
       start_period: 30s
+
+  mocknhs:
+    # Static replay of a www.england.nhs.uk snapshot (tests/fixtures/nhs), laid
+    # out by URL path. The real site returns an empty response to GitHub-hosted
+    # runners, so the NHS tests point the inputs here through the add-on's
+    # ta_uk_open_data_endpoints.conf [nhs] base_url override.
+    image: python:3.12-alpine
+    container_name: ta_uk_open_data_mocknhs
+    hostname: mocknhs
+    command: ["python", "-m", "http.server", "8080", "--directory", "/data"]
+    volumes:
+      - ../tests/fixtures/nhs:/data:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/README.md')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

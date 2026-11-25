@@ -198,6 +198,10 @@ jobs:
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
           SPLUNK_CONTAINER: ta_uk_open_data_splunk
+          # www.england.nhs.uk returns an empty response to GitHub-hosted
+          # runners, so the NHS inputs read a snapshot from the mocknhs service.
+          NHS_REPLAY_SPLUNK_URL: http://mocknhs:8080
+          NHS_REPLAY_TEST_URL: http://127.0.0.1:8081
         run: pytest tests/ -v -ra
 
       - name: Inputs ran on the expected Python
