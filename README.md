@@ -121,8 +121,8 @@ booked appointments: `all_attendances`, `all_over4hrs` and
 | Regions | (all) | Comma-separated region ids: 1-14 the DNO regions (1 North Scotland ... 13 London, 14 South East England), 15 England, 16 Scotland, 17 Wales, 18 GB. |
 
 It calls `GET /regional/intensity/{from}/{to}` and emits one event per region per
-**finished** half-hour period (the current period waits for the next run, so each is
-written once). The regional API publishes a forecast only, no actual:
+**finished** half-hour period, so each is written once (the API returns only finished
+periods, and the input skips a running one if it ever does). The regional API publishes a forecast only, no actual:
 
 ```json
 // carbonintensity:regional  (_time = period "from")
