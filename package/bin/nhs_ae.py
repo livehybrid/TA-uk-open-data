@@ -41,6 +41,31 @@ def _num(v):
         return 0
 
 
+# The other columns of the monthly CSV, by their exact (lower-cased) header.
+# Booked appointments count towards the NHS headline "all attendances" and its
+# 4-hour figure; the decision-to-admit waits are the "trolley waits".
+EXTRA_COLUMNS = (
+    ("type1_booked_attendances", "a&e attendances booked appointments type 1"),
+    ("type2_booked_attendances", "a&e attendances booked appointments type 2"),
+    ("other_booked_attendances", "a&e attendances booked appointments other department"),
+    ("type2_over4hrs", "attendances over 4hrs type 2"),
+    ("other_over4hrs", "attendances over 4hrs other department"),
+    ("type1_booked_over4hrs", "attendances over 4hrs booked appointments type 1"),
+    ("type2_booked_over4hrs", "attendances over 4hrs booked appointments type 2"),
+    ("other_booked_over4hrs", "attendances over 4hrs booked appointments other department"),
+    ("dta_4to12hr_waits", "patients who have waited 4-12 hs from dta to admission"),
+    ("dta_12hr_plus_waits", "patients who have waited 12+ hrs from dta to admission"),
+    ("emergency_admissions_type1", "emergency admissions via a&e - type 1"),
+    ("emergency_admissions_type2", "emergency admissions via a&e - type 2"),
+    ("emergency_admissions_other", "emergency admissions via a&e - other a&e department"),
+    ("other_emergency_admissions", "other emergency admissions"),
+)
+
+
+def _norm_header(h):
+    return re.sub(r"\s+", " ", h.replace("\ufeff", "")).strip().lower()
+
+
 def _period_from_url(url):
     m = re.search(r"(january|february|march|april|may|june|july|august|september|october|november|december)[-_ ]*(\d{4})", url, re.I)
     if not m:
@@ -103,7 +128,8 @@ class NhsAE(Script):
         rows = list(csv.reader(io.StringIO(raw)))
         if len(rows) < 2:
             return 0, None
-        hdr = [h.strip().lower() for h in rows[0]]
+        hdr = [_norm_header(h) for h in rows[0]]
+        extra_idx = [(name, hdr.index(h)) for name, h in EXTRA_COLUMNS if h in hdr]
 
         def col(*subs):
             for i, h in enumerate(hdr):
@@ -131,13 +157,26 @@ class NhsAE(Script):
             ev.sourceType = ST
             ev.index = index
             ev.time = "%d" % _month_epoch(period)
-            ev.data = json.dumps({
+            body = {
                 "period": period, "org_code": r[c_org].strip(),
                 "org_name": r[c_name].strip() if c_name >= 0 else "",
                 "region": "TOTAL" if is_total else (r[c_parent].strip() if c_parent >= 0 else ""),
                 "type1_attendances": t1, "type1_over4hrs": t1o,
                 "type1_within4hr_pct": (round(1000 * (t1 - t1o) / t1) / 10) if t1 > 0 else None,
-                "type2_attendances": t2, "other_attendances": oth, "total_attendances": t1 + t2 + oth})
+                "type2_attendances": t2, "other_attendances": oth, "total_attendances": t1 + t2 + oth}
+            for field, i in extra_idx:
+                body[field] = _num(r[i]) if i < len(r) else None
+            booked = [body.get(k) for k in ("type1_booked_attendances", "type2_booked_attendances",
+                                             "other_booked_attendances")]
+            over = [t1o] + [body.get(k) for k in ("type2_over4hrs", "other_over4hrs", "type1_booked_over4hrs",
+                                                  "type2_booked_over4hrs", "other_booked_over4hrs")]
+            if None not in booked and None not in over:
+                # The NHS headline: every attendance, booked appointments included.
+                all_att = t1 + t2 + oth + sum(booked)
+                body["all_attendances"] = all_att
+                body["all_over4hrs"] = sum(over)
+                body["all_within4hr_pct"] = (round(1000 * (all_att - sum(over)) / all_att) / 10) if all_att > 0 else None
+            ev.data = json.dumps(body)
             ew.write_event(ev)
             n += 1
         return n, period

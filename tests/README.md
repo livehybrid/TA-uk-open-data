@@ -10,6 +10,7 @@ the built add-on mounted, then proves the add-on works against a live instance.
 | `test_install_smoke.py` | App installs + enabled, both modular inputs registered, schemes introspect, no startup import/init errors | none |
 | `test_modinput_scheme.py` | Each packaged script runs under Splunk's Python (`--scheme`) — proves vendored libs import in-container | none |
 | `test_live_carbon_intensity.py` | Creates a real `carbon_intensity` input, lets splunkd run it against `api.carbonintensity.org.uk`, asserts events are **indexed** with extracted fields | egress |
+| `test_live_open_data.py` | Real `nhs_ae`, `carbon_intensity_regional` and `nhs_ambulance` inputs against the live sources. Checks every published month / region / period is indexed exactly once (also after later runs), and compares field values with the test's own parse of the same CSVs and a different Carbon Intensity endpoint | egress |
 
 The live test fails only when *our* pipeline is broken. If the upstream public
 API is unreachable from the runner it **skips** (with the reason logged by the

@@ -38,7 +38,7 @@ APP = "TA-uk-open-data"
 # /services/data/modular-inputs can be briefly empty at that point. The `splunk`
 # fixture waits for these kinds to register so every test asserts against a
 # fully-initialised splunkd rather than a cold-start snapshot.
-EXPECTED_MODULAR_INPUTS = ("carbon_intensity", "nhs_ae")
+EXPECTED_MODULAR_INPUTS = ("carbon_intensity", "carbon_intensity_regional", "nhs_ae", "nhs_ambulance")
 
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False

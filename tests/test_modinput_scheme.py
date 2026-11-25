@@ -19,6 +19,8 @@ APP = "TA-uk-open-data"
 SCRIPTS = {
     "carbon_intensity.py": "Carbon Intensity",
     "nhs_ae.py": "NHS A&E (monthly)",
+    "carbon_intensity_regional.py": "Carbon Intensity (regional)",
+    "nhs_ambulance.py": "NHS Ambulance (monthly)",
 }
 
 

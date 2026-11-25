@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 APP = "TA-uk-open-data"
-INPUTS = ("carbon_intensity", "nhs_ae")
+INPUTS = ("carbon_intensity", "carbon_intensity_regional", "nhs_ae", "nhs_ambulance")
 
 
 def test_app_installed_and_enabled(splunk):
@@ -29,7 +29,8 @@ def test_both_modular_inputs_registered(splunk):
 def test_modinput_schemes_expose_expected_args(splunk):
     # If a script failed to import, Splunk cannot introspect its scheme, so the
     # input-specific argument would be absent. Shape-tolerant: check the JSON.
-    expected = {"carbon_intensity": "lookback_days", "nhs_ae": "financial_years"}
+    expected = {"carbon_intensity": "lookback_days", "carbon_intensity_regional": "regions",
+                "nhs_ae": "financial_years", "nhs_ambulance": "since"}
     for inp, arg in expected.items():
         data = splunk.get_json(f"/services/data/modular-inputs/{inp}")
         assert arg in json.dumps(data), f"{inp} scheme missing expected arg '{arg}'"
@@ -43,8 +44,10 @@ def test_no_startup_import_or_init_errors(splunk):
         'search index=_internal log_level=ERROR '
         '("Unable to initialize modular input \\"carbon_intensity\\"" '
         'OR "Unable to initialize modular input \\"nhs_ae\\"" '
+        'OR "Unable to initialize modular input \\"carbon_intensity_regional\\"" '
+        'OR "Unable to initialize modular input \\"nhs_ambulance\\"" '
         'OR (("ImportError" OR "ModuleNotFoundError" OR "Traceback") '
-        '    AND (carbon_intensity OR nhs_ae OR import_declare_test))) '
+        '    AND (carbon_intensity OR carbon_intensity_regional OR nhs_ae OR nhs_ambulance OR import_declare_test))) '
         'earliest=-1h'
     )
     hits = splunk.search(spl, earliest="-1h")
