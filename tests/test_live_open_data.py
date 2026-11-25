@@ -20,6 +20,7 @@ import io
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -43,6 +44,17 @@ def _fetch(url, timeout=120):
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8-sig", errors="replace")
+
+
+def _page_links(url, pattern):
+    """Links on a page; fail with what came back if there are none."""
+    try:
+        html = _fetch(url, 60)
+    except urllib.error.HTTPError as exc:
+        pytest.fail(f"{url} -> HTTP {exc.code}: {exc.read()[:300]!r}")
+    links = list(dict.fromkeys(re.findall(pattern, html, re.I)))
+    assert links, f"no links matching {pattern} on {url} ({len(html)} bytes): {html[:400]!r}"
+    return links
 
 
 def _create(splunk, kind, name, **params):
@@ -88,9 +100,8 @@ def _runs(splunk, kind, name, needle):
 
 def _nhs_expected():
     """{period: {org_code: DictReader row}} for every monthly CSV on the FY page."""
-    html = _fetch(NHS_PAGE, 60)
     out = {}
-    for link in dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)):
+    for link in _page_links(NHS_PAGE, r'href="([^"]+\.csv)"'):
         rows = list(csv.DictReader(io.StringIO(_fetch(link))))
         data = [r for r in rows if (r.get("Org Code") or "").strip()]
         if not data:
@@ -155,7 +166,7 @@ def test_nhs_ae_total_rows_match_the_csv(splunk, nhs):
     if not rows:
         _skip_if_upstream_down(splunk, "nhs_ae", "ci_nhs")
     events = {json.loads(r["_raw"])["period"]: (json.loads(r["_raw"]), int(float(r["_time"]))) for r in rows}
-    assert set(events) == set(nhs), f"TOTAL rows for {sorted(events)}, CSVs for {sorted(nhs)}"
+    assert nhs and set(events) == set(nhs), f"TOTAL rows for {sorted(events)}, CSVs for {sorted(nhs)}"
     for period, (ev, ts) in events.items():
         src = nhs[period]["TOTAL"]
         want = {f: int(src[h]) for f, h in NHS_FIELDS.items()}
@@ -172,6 +183,7 @@ def test_nhs_ae_total_rows_match_the_csv(splunk, nhs):
 
 
 def test_nhs_ae_second_run_adds_nothing(splunk, nhs):
+    assert nhs, "the test found no monthly CSVs on the NHS page"
     _nhs_counts(splunk, nhs)
     deadline = time.time() + 180
     while time.time() < deadline and not _runs(splunk, "nhs_ae", "ci_nhs", "total new events=0"):
@@ -279,8 +291,7 @@ AMB_SPL = f'search index={INDEX} source="nhs_ambulance://ci_amb" sourcetype="nhs
 @pytest.fixture(scope="module")
 def amb(splunk):
     _create(splunk, "nhs_ambulance", "ci_amb", since=AMB_SINCE)
-    html = _fetch(AMB_PAGE, 60)
-    link = next(u for u in re.findall(r'href="([^"]+\.csv)"', html) if "AmbSYS" in u and "Old-" not in u)
+    link = next(u for u in _page_links(AMB_PAGE, r'href="([^"]+AmbSYS[^"]*\.csv)"') if "Old-" not in u)
     rows = {}
     for r in csv.DictReader(io.StringIO(_fetch(link))):
         period = "%s-%02d" % (r["Year"], int(r["Month"]))

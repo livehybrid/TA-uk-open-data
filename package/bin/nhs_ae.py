@@ -116,12 +116,19 @@ class NhsAE(Script):
         except Exception:
             pass
 
-    def _csv_links(self, fy):
+    def _csv_links(self, fy, ew=None, name=""):
         try:
             html = _fetch_text(BASE % fy, 40)
-        except Exception:
+        except Exception as exc:
+            # Logged, not swallowed: a blocked or moved page used to make the
+            # input do nothing with no trace at all.
+            if ew is not None:
+                ew.log(EventWriter.ERROR, "nhs_ae[%s] fetch failed for %s: %s" % (name, BASE % fy, exc))
             return []
-        return list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
+        links = list(dict.fromkeys(re.findall(r'href="([^"]+\.csv)"', html, re.I)))
+        if not links and ew is not None:
+            ew.log(EventWriter.WARN, "nhs_ae[%s] no CSV links on %s (%d bytes)" % (name, BASE % fy, len(html)))
+        return links
 
     def _emit_csv(self, url, index, ew, name):
         raw = _fetch_text(url, 60)
@@ -194,7 +201,7 @@ class NhsAE(Script):
             loaded = self._load_cp(cp_path)
             total = 0
             for fy in fys:
-                for url in self._csv_links(fy):
+                for url in self._csv_links(fy, ew, name):
                     period = _period_from_url(url)
                     if period and period in loaded:
                         continue
