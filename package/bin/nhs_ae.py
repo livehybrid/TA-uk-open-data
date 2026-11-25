@@ -1,5 +1,6 @@
 import import_declare_test  # noqa: F401  (path bootstrap — must be first)
 
+import configparser
 import csv
 import io
 import json
@@ -20,6 +21,38 @@ MONTHS = {m: i + 1 for i, m in enumerate(
 UA = {"User-Agent": "Mozilla/5.0 (TA-uk-open-data NHS A&E modular input)"}
 
 
+NHS_HOST = "https://www.england.nhs.uk"
+ENDPOINTS_CONF = "ta_uk_open_data_endpoints"
+
+
+def nhs_base():
+    """Where www.england.nhs.uk is fetched from: the real site unless overridden.
+
+    An optional app conf, ta_uk_open_data_endpoints.conf, stanza [nhs], key
+    base_url, replaces the scheme and host of every NHS England URL (the pages
+    and the CSV links on them). Read from default/ then local/ of this app on
+    every call. Absent or empty means the real site. Used for a mirror or proxy,
+    and by CI, which replays a snapshot because the real site returns an empty
+    response to GitHub-hosted runners.
+    """
+    app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    conf = configparser.ConfigParser(interpolation=None)
+    conf.read([os.path.join(app, d, ENDPOINTS_CONF + ".conf") for d in ("default", "local")])
+    value = conf.get("nhs", "base_url", fallback="").strip()
+    if not value:
+        return NHS_HOST
+    if not re.match(r"^https?://[^/]+", value):
+        raise ValueError("%s.conf [nhs] base_url must be an http(s) URL, got %r" % (ENDPOINTS_CONF, value))
+    return value.rstrip("/")
+
+
+def nhs_url(url):
+    base = nhs_base()
+    if base != NHS_HOST and url.startswith(NHS_HOST + "/"):
+        return base + url[len(NHS_HOST):]
+    return url
+
+
 def _fetch_text(url, timeout):
     """Fetch a URL and return its decoded body using the standard library.
 
@@ -27,11 +60,22 @@ def _fetch_text(url, timeout):
     (3.9 on Splunk 10.0/10.1), and modern ``requests`` releases use PEP 604
     ``X | Y`` annotations that are evaluated at import time and fail on < 3.10,
     which crashes scheme introspection and blocks the input from registering.
+
+    An empty body or HTTP 202 raises. www.england.nhs.uk answers some hosts
+    (GitHub-hosted runners, so probably other cloud ranges too) with an empty
+    page, which used to read as "no CSVs this month" and fail silently.
     """
+    url = nhs_url(url)
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed england.nhs.uk endpoints
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - england.nhs.uk or its configured mirror
+        status = getattr(resp, "status", 200)
+        body = resp.read()
+        if status == 202 or not body:
+            waf = resp.headers.get("x-amzn-waf-action")
+            raise RuntimeError("%s returned an empty response (HTTP %s%s); the site may be blocking this host"
+                               % (url, status, ", x-amzn-waf-action=" + waf if waf else ""))
         charset = resp.headers.get_content_charset() or "utf-8"
-        return resp.read().decode(charset, errors="replace")
+        return body.decode(charset, errors="replace")
 
 
 def _num(v):

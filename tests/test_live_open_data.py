@@ -11,6 +11,13 @@ uses a different Carbon Intensity endpoint (per-region) from the collector
 Upstream outages skip rather than fail, as in test_live_carbon_intensity.py:
 no events plus the input's own fetch error in splunkd.log means the upstream,
 not the add-on, is down.
+
+NHS England: www.england.nhs.uk returns an empty response to GitHub-hosted
+runners. With NHS_REPLAY_SPLUNK_URL and NHS_REPLAY_TEST_URL set (CI does), the
+inputs are pointed at a static replay of a snapshot of the real pages and CSVs
+(tests/fixtures/nhs) through the add-on's ta_uk_open_data_endpoints.conf
+override, and the test reads the same snapshot. Without them the tests use the
+real site, and skip if it answers this host with an empty page.
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ import calendar
 import csv
 import io
 import json
+import os
 import re
 import time
 import urllib.error
@@ -40,7 +48,15 @@ AMB_SINCE = "2025-01"
 CI_API = "https://api.carbonintensity.org.uk"
 
 
+NHS_HOST = "https://www.england.nhs.uk"
+REPLAY_SPLUNK = os.environ.get("NHS_REPLAY_SPLUNK_URL", "").rstrip("/")
+REPLAY_TEST = os.environ.get("NHS_REPLAY_TEST_URL", "").rstrip("/")
+ENDPOINTS = "/servicesNS/nobody/TA-uk-open-data/configs/conf-ta_uk_open_data_endpoints"
+
+
 def _fetch(url, timeout=120):
+    if REPLAY_TEST and url.startswith(NHS_HOST + "/"):
+        url = REPLAY_TEST + url[len(NHS_HOST):]
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8-sig", errors="replace")
@@ -53,8 +69,24 @@ def _page_links(url, pattern):
     except urllib.error.HTTPError as exc:
         pytest.fail(f"{url} -> HTTP {exc.code}: {exc.read()[:300]!r}")
     links = list(dict.fromkeys(re.findall(pattern, html, re.I)))
+    if not html and not REPLAY_TEST:
+        pytest.skip(f"{url} returned an empty page to this host; set NHS_REPLAY_* to use the snapshot")
     assert links, f"no links matching {pattern} on {url} ({len(html)} bytes): {html[:400]!r}"
     return links
+
+
+@pytest.fixture(scope="module")
+def nhs_endpoint(splunk):
+    """Point the NHS inputs at the replay when configured; take it away afterwards."""
+    if not REPLAY_SPLUNK:
+        yield NHS_HOST
+        return
+    st, body = splunk.request("POST", ENDPOINTS, data={"name": "nhs", "base_url": REPLAY_SPLUNK})
+    if st == 409:
+        st, body = splunk.request("POST", f"{ENDPOINTS}/nhs", data={"base_url": REPLAY_SPLUNK})
+    assert st in (200, 201), f"write the NHS endpoint override -> {st}: {body[:300]}"
+    yield REPLAY_SPLUNK
+    splunk.request("DELETE", f"{ENDPOINTS}/nhs")
 
 
 def _create(splunk, kind, name, **params):
@@ -113,7 +145,7 @@ def _nhs_expected():
 
 
 @pytest.fixture(scope="module")
-def nhs(splunk):
+def nhs(splunk, nhs_endpoint):
     _create(splunk, "nhs_ae", "ci_nhs", financial_years=NHS_FY)
     yield _nhs_expected()
     _delete(splunk, "nhs_ae", "ci_nhs")
@@ -289,7 +321,7 @@ AMB_SPL = f'search index={INDEX} source="nhs_ambulance://ci_amb" sourcetype="nhs
 
 
 @pytest.fixture(scope="module")
-def amb(splunk):
+def amb(splunk, nhs_endpoint):
     _create(splunk, "nhs_ambulance", "ci_amb", since=AMB_SINCE)
     link = next(u for u in _page_links(AMB_PAGE, r'href="([^"]+AmbSYS[^"]*\.csv)"') if "Old-" not in u)
     rows = {}
