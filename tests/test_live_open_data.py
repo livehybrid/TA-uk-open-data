@@ -262,9 +262,11 @@ def test_regional_every_region_every_finished_period_once(splunk, regional):
     late = splunk.search(
         REG_SPL.format(INDEX, "ci_regional") + ' | spath output=pto path=to '
         '| eval end=strptime(rtrim(pto, "Z") . "+0000", "%Y-%m-%dT%H:%M%z") '
-        '| where end > _indextime | stats count as n values(pto) as ends',
+        '| stats count as total count(end) as parsed sum(eval(if(end > _indextime, 1, 0))) as n '
+        'values(eval(if(end > _indextime, pto, null()))) as ends',
         earliest="-3d", latest="+1d", count=10)
-    n_late = int(late[0]["n"]) if late else 0
+    assert late and int(late[0]["parsed"]) == int(late[0]["total"]) > 0, f"period ends did not parse: {late}"
+    n_late = int(late[0]["n"])
     assert n_late == 0, f"{n_late} events for periods still running when indexed: {late[0].get('ends')}"
     by_period = {p: sorted(r for f, r in counts if f == p) for p in periods}
     bad = {p: r for p, r in by_period.items() if r != list(range(1, 19))}
