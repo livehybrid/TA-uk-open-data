@@ -156,7 +156,7 @@ NHS_SPL = f'search index={INDEX} source="nhs_ae://ci_nhs" sourcetype="nhs:ae:mon
 
 def _nhs_counts(splunk, expected):
     want = sum(len(v) for v in expected.values())
-    rows = _wait(splunk, NHS_SPL + " | spath | stats count dc(org_code) as orgs by period",
+    rows = _wait(splunk, NHS_SPL + " | spath | eval period=mvindex(period, 0), org_code=mvindex(org_code, 0) | stats count dc(org_code) as orgs by period",
                  lambda rs: sum(int(r["count"]) for r in rs) >= want)
     return {r["period"]: (int(r["count"]), int(r["orgs"])) for r in rows}
 
@@ -194,10 +194,10 @@ NHS_FIELDS = {
 
 def test_nhs_ae_total_rows_match_the_csv(splunk, nhs):
     _nhs_counts(splunk, nhs)
-    rows = splunk.search(NHS_SPL + ' org_code=TOTAL | table _raw _time', earliest="-15y", latest="+1d", count=100)
+    rows = splunk.search(NHS_SPL + ' org_code=TOTAL | eval t=_time | table _raw t', earliest="-15y", latest="+1d", count=100)
     if not rows:
         _skip_if_upstream_down(splunk, "nhs_ae", "ci_nhs")
-    events = {json.loads(r["_raw"])["period"]: (json.loads(r["_raw"]), int(float(r["_time"]))) for r in rows}
+    events = {json.loads(r["_raw"])["period"]: (json.loads(r["_raw"]), int(float(r["t"]))) for r in rows}
     assert nhs and set(events) == set(nhs), f"TOTAL rows for {sorted(events)}, CSVs for {sorted(nhs)}"
     for period, (ev, ts) in events.items():
         src = nhs[period]["TOTAL"]
@@ -245,9 +245,9 @@ def _ci_epoch(text):
 
 
 def _regional_counts(splunk, name, min_periods=40):
-    spl = REG_SPL.format(INDEX, name) + " | spath output=pfrom path=from | spath regionid | stats count by pfrom regionid"
+    spl = REG_SPL.format(INDEX, name) + " | spath output=pfrom path=from | spath output=rid path=regionid | stats count by pfrom rid"
     rows = _wait(splunk, spl, lambda rs: len({r["pfrom"] for r in rs}) >= min_periods, earliest="-3d")
-    return {(r["pfrom"], int(r["regionid"])): int(r["count"]) for r in rows}
+    return {(r["pfrom"], int(r["rid"])): int(r["count"]) for r in rows}
 
 
 def test_regional_every_region_every_finished_period_once(splunk, regional):
@@ -334,7 +334,7 @@ def amb(splunk, nhs_endpoint):
 
 
 def _amb_counts(splunk, want):
-    rows = _wait(splunk, AMB_SPL + " | spath | stats count by period org_code",
+    rows = _wait(splunk, AMB_SPL + " | spath | eval period=mvindex(period, 0), org_code=mvindex(org_code, 0) | stats count by period org_code",
                  lambda rs: sum(int(r["count"]) for r in rs) >= want)
     return {(r["period"], r["org_code"]): int(r["count"]) for r in rows}
 
@@ -350,7 +350,7 @@ def test_ambulance_every_org_every_month_once(splunk, amb):
 
 def test_ambulance_fields_match_the_csv(splunk, amb):
     _amb_counts(splunk, len(amb))
-    rows = splunk.search(AMB_SPL + " org_code=Eng | table _raw _time", earliest="-15y", count=200)
+    rows = splunk.search(AMB_SPL + " org_code=Eng | eval t=_time | table _raw t", earliest="-15y", count=200)
     if not rows:
         _skip_if_upstream_down(splunk, "nhs_ambulance", "ci_amb")
     assert len(rows) == len({p for p, o in amb if o == "Eng"}), len(rows)
@@ -361,7 +361,7 @@ def test_ambulance_fields_match_the_csv(splunk, amb):
         got = {f: ev.get(f) for f in AMB_FIELDS.values()}
         assert got == want, (ev["period"], {f: (got[f], want[f]) for f in want if got[f] != want[f]})
         assert ev["org_name"] == "England"
-        assert time.strftime("%Y-%m", time.gmtime(int(float(r["_time"])))) == ev["period"]
+        assert time.strftime("%Y-%m", time.gmtime(int(float(r["t"])))) == ev["period"]
 
 
 def test_ambulance_since_is_honoured_and_second_run_adds_nothing(splunk, amb):
