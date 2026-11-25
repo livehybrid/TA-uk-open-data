@@ -258,7 +258,14 @@ def test_regional_every_region_every_finished_period_once(splunk, regional):
     assert len(periods) >= 40, f"only {len(periods)} periods"
     starts = [_ci_epoch(p) for p in periods]
     assert all(b - a == 1800 for a, b in zip(starts, starts[1:])), "gap in the half-hour periods"
-    assert starts[-1] + 1800 <= time.time(), f"an unfinished period was written: {periods[-1]}"
+    # Each event must describe a period that had ended when it was indexed.
+    late = splunk.search(
+        REG_SPL.format(INDEX, "ci_regional") + ' | spath output=pto path=to '
+        '| eval end=strptime(rtrim(pto, "Z") . "+0000", "%Y-%m-%dT%H:%M%z") '
+        '| where end > _indextime | stats count as n values(pto) as ends',
+        earliest="-3d", latest="+1d", count=10)
+    n_late = int(late[0]["n"]) if late else 0
+    assert n_late == 0, f"{n_late} events for periods still running when indexed: {late[0].get('ends')}"
     by_period = {p: sorted(r for f, r in counts if f == p) for p in periods}
     bad = {p: r for p, r in by_period.items() if r != list(range(1, 19))}
     assert not bad, f"periods without exactly regions 1-18: {dict(list(bad.items())[:3])}"
