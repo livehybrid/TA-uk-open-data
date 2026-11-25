@@ -373,3 +373,24 @@ def test_ambulance_since_is_honoured_and_second_run_adds_nothing(splunk, amb):
     counts = _amb_counts(splunk, len(amb))
     assert min(p for p, _ in counts) >= AMB_SINCE, min(counts)
     assert set(counts) == set(amb) and set(counts.values()) == {1}, "changed after the second run"
+
+
+def test_nhs_ae_logs_an_empty_page(splunk, nhs_endpoint):
+    # www.england.nhs.uk answers some hosts with an empty page. The input used
+    # to read that as "no CSVs" and log nothing. The snapshot's 2099-00 page is
+    # an empty file standing in for that answer.
+    if not REPLAY_SPLUNK:
+        pytest.skip("needs the snapshot replay (NHS_REPLAY_* unset)")
+    _create(splunk, "nhs_ae", "ci_nhs_empty", financial_years="2099-00")
+    try:
+        deadline = time.time() + 180
+        lines = []
+        while time.time() < deadline:
+            lines = _logged(splunk, "nhs_ae", "ci_nhs_empty")
+            if any("empty response" in line for line in lines):
+                break
+            time.sleep(10)
+        assert any("fetch failed" in line and "empty response" in line for line in lines), (
+            f"no empty-response error logged; nhs_ae lines: {[line[-200:] for line in lines][:5]}")
+    finally:
+        _delete(splunk, "nhs_ae", "ci_nhs_empty")

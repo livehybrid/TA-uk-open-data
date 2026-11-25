@@ -10,6 +10,8 @@ from calendar import timegm
 
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
+from run_lock import RunLock
+
 from nhs_ae import _fetch_text
 
 ST = "nhs:ambulance:monthly"
@@ -131,6 +133,11 @@ class NhsAmbulance(Script):
 
     def stream_events(self, inputs, ew):
         for name, item in inputs.inputs.items():
+            lock = RunLock(inputs.metadata.get("checkpoint_dir"), "nhs_ambulance", name)
+            if not lock.acquire():
+                ew.log(EventWriter.INFO, "nhs_ambulance[%s] another run is still in progress; skipping this one" % name)
+                continue
+            self._held_locks = getattr(self, "_held_locks", []) + [lock]  # released at process exit
             index = str(item.get("index") or "nhsengland")
             since = str(item.get("since") or "").strip() or None
             if since and not PERIOD_RE.match(since):
@@ -156,7 +163,10 @@ class NhsAmbulance(Script):
                 ev.time = "%d" % month_epoch(period)
                 ev.data = json.dumps(body)
                 ew.write_event(ev)
-                new_periods.add(period)
+                if period not in new_periods:
+                    # The CSV is in month order: every earlier month is complete.
+                    self._save_cp(cp_path, loaded | new_periods)
+                    new_periods.add(period)
                 n += 1
             loaded |= new_periods
             self._save_cp(cp_path, loaded)

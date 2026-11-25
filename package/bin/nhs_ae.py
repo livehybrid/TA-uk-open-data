@@ -13,6 +13,8 @@ from calendar import timegm
 
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
+from run_lock import RunLock
+
 ST = "nhs:ae:monthly"
 BASE = "https://www.england.nhs.uk/statistics/statistical-work-areas/ae-waiting-times-and-activity/ae-attendances-and-emergency-admissions-%s/"
 MONTHS = {m: i + 1 for i, m in enumerate(
@@ -239,6 +241,11 @@ class NhsAE(Script):
 
     def stream_events(self, inputs, ew):
         for name, item in inputs.inputs.items():
+            lock = RunLock(inputs.metadata.get("checkpoint_dir"), "nhs_ae", name)
+            if not lock.acquire():
+                ew.log(EventWriter.INFO, "nhs_ae[%s] another run is still in progress; skipping this one" % name)
+                continue
+            self._held_locks = getattr(self, "_held_locks", []) + [lock]  # released at process exit
             index = str(item.get("index") or "nhsengland")
             fys = [s.strip() for s in str(item.get("financial_years") or "2025-26,2026-27").split(",") if s.strip()]
             cp_path = self._cp_path(inputs, name)
@@ -253,6 +260,7 @@ class NhsAE(Script):
                         n, period = self._emit_csv(url, index, ew, name)
                         if period:
                             loaded.add(period)
+                            self._save_cp(cp_path, loaded)  # per month, not only at the end
                             total += n
                             ew.log(EventWriter.INFO, "nhs_ae[%s] loaded %s (%d rows) from %s" % (name, period, n, url))
                     except Exception as exc:

@@ -7,6 +7,8 @@ import time
 
 from splunklib.modularinput import Argument, Event, EventWriter, Scheme, Script
 
+from run_lock import RunLock
+
 from carbon_intensity import API, _epoch, _get, _iso
 
 ST_REGIONAL = "carbonintensity:regional"
@@ -103,6 +105,11 @@ class CarbonIntensityRegional(Script):
 
     def stream_events(self, inputs, ew):
         for name, item in inputs.inputs.items():
+            lock = RunLock(inputs.metadata.get("checkpoint_dir"), "carbon_intensity_regional", name)
+            if not lock.acquire():
+                ew.log(EventWriter.INFO, "carbon_intensity_regional[%s] another run is still in progress; skipping this one" % name)
+                continue
+            self._held_locks = getattr(self, "_held_locks", []) + [lock]  # released at process exit
             index = str(item.get("index") or "carbonintensity")
             try:
                 lookback = max(1, min(MAX_LOOKBACK_DAYS, int(float(item.get("lookback_days") or 1))))

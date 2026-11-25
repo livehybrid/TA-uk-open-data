@@ -208,6 +208,19 @@ AppInspect, and attaches the package to GitHub Releases (see `.github/workflows`
   month automatically once NHS England publishes it.
 - Both NHS inputs remember months, not files: a month NHS England later revises
   is not loaded again.
+- www.england.nhs.uk returns an empty page to some hosts (GitHub-hosted runners
+  do; other cloud ranges may). The NHS inputs then log
+  `fetch failed ... returned an empty response` in `index=_internal` and load
+  nothing. Behind such a block, point them at a mirror or proxy with the
+  optional `local/ta_uk_open_data_endpoints.conf`:
+
+  ```ini
+  [nhs]
+  base_url = https://nhs-mirror.example.internal
+  ```
+
+  It replaces `https://www.england.nhs.uk` in every URL they fetch (see
+  `README/ta_uk_open_data_endpoints.conf.spec`). CI uses it to replay a snapshot.
 
 ## License
 Apache-2.0.
